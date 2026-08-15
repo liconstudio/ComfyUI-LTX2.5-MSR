@@ -1,0 +1,21 @@
+[project]
+name = "ltx2.5-msr"
+version = "1.0.0"
+description = "Multi-reference image conditioning nodes for LTX-2.5 in ComfyUI, using MSR slot embeddings and negative temporal offsets."
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+dependencies = []
+classifiers = [
+    "Operating System :: OS Independent",
+    "Environment :: GPU :: NVIDIA CUDA",
+]
+
+[project.urls]
+Repository = "https://github.com/liconstudio/ComfyUI-LTX2.5-MSR"
+Documentation = "https://github.com/liconstudio/ComfyUI-LTX2.5-MSR#readme"
+"Bug Tracker" = "https://github.com/liconstudio/ComfyUI-LTX2.5-MSR/issues"
+
+[tool.comfy]
+PublisherId = "liconstudio"
+DisplayName = "ComfyUI-LTX2.5-MSR"
+
