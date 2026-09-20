@@ -174,3 +174,14 @@ Connect the guide conditioning and sampled video latent through `LTXVCropGuides`
 ## Scope
 
 This repository implements only MSR-specific LoRA loading and multi-reference conditioning. Base-model loading, text encoding, prompt enhancement, sigma schedules, sampling, latent upscaling, VAE decoding, audio decoding, and video output are intentionally handled by native ComfyUI nodes.
+
+
+## AVref 音频参考功能
+
+已整合 AVref 加载器、三路音频参考编码器和 AVref Guide，原版节点及 25/33 帧工作流保持不变。AVref 节点要求含图像/音频 slot embedding 和配套 metadata 的专用 LoRA，参考图固定为 25 帧。连接方法见 [AVref 说明](README-AVref.md)，示例见 `LTX2.5-MSR-AVref-sample-workflow.json`。独立 AVref 插件应停用以避免重复注册。
+
+### 1.1.0
+
+- 整合 AVref 专用 LoRA 加载器、音频参考编码器及 Guide。
+- 保留原版节点和工作流兼容性。
+- 音频编码器界面提供前两路输入，第三路按原配置保持隐藏。
