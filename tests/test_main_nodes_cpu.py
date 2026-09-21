@@ -179,30 +179,32 @@ class UnifiedMSRCPUTests(unittest.TestCase):
         })
 
     def test_main_guide_keeps_sparse_slot_and_background_time_window(self):
-        args = guide_inputs(reference_parameters(audio=True))
-        args.update(pic2=args["pic1"], pic3=args["pic1"], background=args["pic1"])
-        args["audio_ref2"] = {"samples": torch.zeros(1, 8, 2, 16)}
-        positive, negative, latent = GUIDE.execute(**args).result
-        audio = positive[0][1]["ref_audio"]
-        self.assertIs(negative[0][1]["ref_audio"], audio)
-        self.assertEqual(audio["slot_ids"], (2,))
-        self.assertEqual(audio["slot_lengths"], (2,))
-        self.assertEqual(audio["image_slot_count"], 4)
-        self.assertEqual(args["vae"].encoded_frames, [25] * 4)
-        self.assertEqual(tuple(latent["samples"].shape), (1, 128, 18, 2, 2))
-        self.assertEqual(len(positive[0][1]["guide_attention_entries"]), 4)
+        for frames, expected_latent_frames in (("25", 18), ("33", 22)):
+            with self.subTest(frames=frames):
+                args = guide_inputs(reference_parameters(audio=True), frames)
+                args.update(pic2=args["pic1"], pic3=args["pic1"], background=args["pic1"])
+                args["audio_ref2"] = {"samples": torch.zeros(1, 8, 2, 16)}
+                positive, negative, latent = GUIDE.execute(**args).result
+                audio = positive[0][1]["ref_audio"]
+                self.assertIs(negative[0][1]["ref_audio"], audio)
+                self.assertEqual(audio["slot_ids"], (2,))
+                self.assertEqual(audio["slot_lengths"], (2,))
+                self.assertEqual(audio["image_slot_count"], 4)
+                self.assertEqual(args["vae"].encoded_frames, [int(frames)] * 4)
+                self.assertEqual(tuple(latent["samples"].shape), (1, 128, expected_latent_frames, 2, 2))
+                self.assertEqual(len(positive[0][1]["guide_attention_entries"]), 4)
 
-        model = FakeDiffusionModel()
-        patched = types.MethodType(MAIN._make_avref_process_input_patch(model._process_input), model)
-        (_, tokens), (_, positions), _ = patched(None, None, None, ref_audio=audio)
-        torch.testing.assert_close(
-            positions[0, 0, 1, 1], torch.tensor(-10.04), atol=1e-6, rtol=0
-        )
-        torch.testing.assert_close(tokens[:, :2], audio["tokens"])
-        torch.testing.assert_close(tokens[:, 2:], torch.full((1, 2, 128), 9.0))
+                model = FakeDiffusionModel()
+                patched = types.MethodType(MAIN._make_avref_process_input_patch(model._process_input), model)
+                (_, tokens), (_, positions), _ = patched(None, None, None, ref_audio=audio)
+                torch.testing.assert_close(
+                    positions[0, 0, 1, 1], torch.tensor(-10.04), atol=1e-6, rtol=0
+                )
+                torch.testing.assert_close(tokens[:, :2], audio["tokens"])
+                torch.testing.assert_close(tokens[:, 2:], torch.full((1, 2, 128), 9.0))
 
     def test_image_only_modes_keep_original_frame_choices(self):
-        for params in (None, reference_parameters()):
+        for params in (None, reference_parameters(), reference_parameters(audio=True)):
             for frames, expected_latent_frames in (("25", 6), ("33", 7)):
                 with self.subTest(msr=params is not None, frames=frames):
                     args = guide_inputs(params, frames)
@@ -211,17 +213,13 @@ class UnifiedMSRCPUTests(unittest.TestCase):
                     self.assertEqual(latent["samples"].shape[2], expected_latent_frames)
                     self.assertNotIn("ref_audio", positive[0][1])
 
-    def test_audio_requires_avref_and_avref_requires_25_frames(self):
+    def test_audio_requires_avref(self):
         for params in (None, reference_parameters()):
             args = guide_inputs(params)
             args["audio_ref1"] = {"samples": torch.zeros(1, 8, 2, 16)}
             with self.assertRaisesRegex(ValueError, "require an AVref LoRA"):
                 GUIDE.execute(**args)
             self.assertEqual(args["vae"].encoded_frames, [])
-        args = guide_inputs(reference_parameters(audio=True), "33")
-        with self.assertRaisesRegex(ValueError, "reference_frames=25"):
-            GUIDE.execute(**args)
-        self.assertEqual(args["vae"].encoded_frames, [])
 
     def test_audio_rejects_missing_picture_and_invalid_native_latents(self):
         args = guide_inputs(reference_parameters(audio=True))

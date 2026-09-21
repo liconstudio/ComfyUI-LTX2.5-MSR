@@ -19,7 +19,7 @@ LoadAudio -> LTXV Audio VAE Encode -> Guide.audio_ref2  (对应 pic2)
                          |
 positive/negative + Video VAE + video-only latent + pic1...pic4/background
                          |
-             MSR Multi-Reference Guide (reference_frames=25)
+             MSR Multi-Reference Guide (reference_frames=25/33)
                          |
                 LTXVConcatAVLatent -> sampler
                          |
@@ -64,7 +64,7 @@ AVref 必须同时包含 `reference_slot_embedding.*` 和 `reference_audio_slot_
 - `reference_slot_embedding_enabled=true`
 - `reference_audio_slot_embedding_enabled=true`
 
-AVref 图像参考必须设为 25 帧，即使没有连接参考音频。普通 MSR 仍支持 25/33 帧；未连接 MSR 参数时，原标准图像引导路径保留。
+AVref 和普通 MSR 的图像参考均可选择 25 或 33 帧，默认 33 帧；33 帧的生成效果需按所用 LoRA 实测比较。参考图帧数不改变音频槽宽或空窗时间坐标。未连接 MSR 参数时，原标准图像引导路径保留。
 
 ## 旧工作流
 

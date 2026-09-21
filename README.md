@@ -60,7 +60,7 @@ For image-only use, missing optional inputs are skipped and image slot IDs are a
 Important options:
 
 - `strength`: reference conditioning strength.
-- `reference_frames`: `25` or `33`; default is `33`. Set it to `25` when using an AVref checkpoint, even without reference audio.
+- `reference_frames`: `25` or `33`; default is `33`. Both options are available for MSR and AVref checkpoints; compare their results with your LoRA.
 - `audio_ref1` / `audio_ref2`: optional LATENT outputs of native `LTXVAudioVAEEncode`, paired with `pic1` / `pic2`. The third audio input is hidden.
 - `use_tiled_encode`: enables tiled reference VAE encoding.
 - `tile_size` / `tile_overlap`: tiled-encoding settings.
@@ -176,13 +176,17 @@ This repository implements only MSR-specific LoRA loading and multi-reference co
 
 ## AVref 音频参考功能
 
-音频参考已直接接入主 `ComfyUI-LTX2.5-MSR Multi-Reference Guide`。主加载器同时支持 MSR 和 AVref LoRA；使用 AVref 时将 `reference_frames` 设为 `25`。
+音频参考已直接接入主 `ComfyUI-LTX2.5-MSR Multi-Reference Guide`。主加载器同时支持 MSR 和 AVref LoRA；两者均可将 `reference_frames` 设为 `25` 或 `33`，效果可按所用 LoRA 实测比较。
 
 连接方式：`LoadAudio → LTXV Audio VAE Encode → Guide.audio_ref1 / audio_ref2`。第三路音频保持隐藏，前两路均为可选输入，分别对应 `pic1` / `pic2`。保留 AVref 的独立槽位 embedding、长度截断和稀疏绝对时间窗，缺失音频不会补静音或挤占其他槽位。
 
 插件只注册主加载器和主 Guide 两个节点。原独立 AVref 加载器、音频编码器和 Guide 已移除；旧 AVref 工作流需改用主节点及原生音频编码器。独立 AVref 插件继续停用。
 
 完整连接说明见 [AVref 说明](README-AVref.md)。
+
+## 1.2.1
+
+- 移除 AVref 固定 25 帧限制，支持选择 25 或 33 帧，音频空窗逻辑不变。
 
 ## 1.2.0
 

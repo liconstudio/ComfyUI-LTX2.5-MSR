@@ -573,7 +573,7 @@ class ComfyUILTX25MSRMultiReferenceGuide(io.ComfyNode):
                 "Encodes pic1...pic4 and an optional background independently, applies the learned "
                 "slot embeddings, and appends clean guide tokens at the negative temporal "
                 "positions used during MSR training. Optional audio LATENT inputs "
-                "use AVref absolute slot windows; AVref requires reference_frames=25."
+                "use AVref absolute slot windows with either 25 or 33 reference frames."
             ),
             inputs=[
                 io.Conditioning.Input("positive"),
@@ -596,7 +596,7 @@ class ComfyUILTX25MSRMultiReferenceGuide(io.ComfyNode):
                 ),
                 io.Latent.Input(
                     "audio_ref1", optional=True,
-                    tooltip="LTXV Audio VAE Encode output for pic1. Requires an AVref LoRA and 25 reference frames.",
+                    tooltip="LTXV Audio VAE Encode output for pic1. Requires an AVref LoRA.",
                 ),
                 io.Latent.Input(
                     "audio_ref2", optional=True,
@@ -693,8 +693,6 @@ class ComfyUILTX25MSRMultiReferenceGuide(io.ComfyNode):
                 f"reference_frames must be 25 or 33, got {reference_frames}."
             )
 
-        if avref_enabled and reference_frames != 25:
-            raise ValueError("AVref checkpoints require reference_frames=25.")
         audio_references = None
         if has_audio:
             audio_references = _audio_latents_to_references(audio_latents, msr_parameters)
