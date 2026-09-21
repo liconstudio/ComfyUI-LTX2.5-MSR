@@ -1,6 +1,6 @@
 # ComfyUI-LTX2.5-MSR
 
-Standalone multi-reference image conditioning nodes for LTX-2.5 in ComfyUI.
+Standalone multi-reference image and optional AVref audio conditioning nodes for LTX-2.5 in ComfyUI.
 
 This extension loads MSR LoRA checkpoints with learned reference-slot embeddings and applies up to five independently encoded image references to an LTX-2.5 video latent. It preserves the MSR training convention: stable slot ordering, learned slot identity embeddings, prepended reference tokens, and consecutive negative temporal offsets.
 
@@ -8,7 +8,8 @@ The extension contains the complete MSR loader and guide implementation. It does
 
 ## Features
 
-- Standalone LTX-2.5 MSR LoRA loader.
+- One MSR/AVref LoRA loader and one main Reference Guide.
+- Optional native audio LATENT inputs on the main Guide, preserving sparse absolute audio windows.
 - One to five references: `pic1`, optional `pic2`–`pic4`, and optional `background`.
 - Learned Fourier-MLP slot embeddings extracted directly from the LoRA checkpoint.
 - Stable reference ordering with consecutive negative temporal positions.
@@ -25,7 +26,7 @@ The extension contains the complete MSR loader and guide implementation. It does
 
 Registration ID: `ComfyUILTX25MSRICLoRALoader`
 
-Loads an MSR LoRA into a native ComfyUI `MODEL` and extracts the learned slot-embedding tensors and MSR metadata.
+Loads an MSR or AVref LoRA into a native ComfyUI `MODEL` and extracts the learned slot-embedding tensors and metadata. AVref checkpoints are detected from their audio weights/metadata, strictly validated, and enable the absolute audio-slot position patch.
 
 Inputs:
 
@@ -54,12 +55,13 @@ Reference inputs are processed in this stable order:
 4. `pic4`
 5. `background`
 
-Missing optional inputs are skipped. Slot IDs and negative offsets are assigned consecutively to the references that are actually connected.
+For image-only use, missing optional inputs are skipped and image slot IDs are assigned consecutively. When audio references are connected, numbered pictures must be contiguous (`pic1..picN`), and each `audio_refN` requires the same numbered picture. Background counts toward the total slot count. Missing audio inputs preserve their time windows and do not renumber the remaining audio.
 
 Important options:
 
 - `strength`: reference conditioning strength.
-- `reference_frames`: `25` or `33`; default is `33`.
+- `reference_frames`: `25` or `33`; default is `33`. Set it to `25` when using an AVref checkpoint, even without reference audio.
+- `audio_ref1` / `audio_ref2`: optional LATENT outputs of native `LTXVAudioVAEEncode`, paired with `pic1` / `pic2`. The third audio input is hidden.
 - `use_tiled_encode`: enables tiled reference VAE encoding.
 - `tile_size` / `tile_overlap`: tiled-encoding settings.
 
@@ -178,10 +180,20 @@ This repository implements only MSR-specific LoRA loading and multi-reference co
 
 ## AVref 音频参考功能
 
-已整合 AVref 加载器、三路音频参考编码器和 AVref Guide，原版节点及 25/33 帧工作流保持不变。AVref 节点要求含图像/音频 slot embedding 和配套 metadata 的专用 LoRA，参考图固定为 25 帧。连接方法见 [AVref 说明](README-AVref.md)，示例见 `LTX2.5-MSR-AVref-sample-workflow.json`。独立 AVref 插件应停用以避免重复注册。
+音频参考已直接接入主 `ComfyUI-LTX2.5-MSR Multi-Reference Guide`。主加载器同时支持 MSR 和 AVref LoRA；使用 AVref 时将 `reference_frames` 设为 `25`。
 
-### 1.1.0
+连接方式：`LoadAudio → LTXV Audio VAE Encode → Guide.audio_ref1 / audio_ref2`。第三路音频保持隐藏，前两路均为可选输入，分别对应 `pic1` / `pic2`。保留 AVref 的独立槽位 embedding、长度截断和稀疏绝对时间窗，缺失音频不会补静音或挤占其他槽位。
 
-- 整合 AVref 专用 LoRA 加载器、音频参考编码器及 Guide。
-- 保留原版节点和工作流兼容性。
-- 音频编码器界面提供前两路输入，第三路按原配置保持隐藏。
+插件只注册主加载器和主 Guide 两个节点。原独立 AVref 加载器、音频编码器和 Guide 已移除；旧 AVref 工作流需改用主节点及原生音频编码器。独立 AVref 插件继续停用。
+
+完整连接说明见 [AVref 说明](README-AVref.md)，更新后的两阶段示例见 `LTX2.5-MSR-AVref-sample-workflow.json`。示例仍包含 KJNodes、rgthree、PromptRelay 等辅助插件节点；本插件的加载器和 Guide 本身不依赖这些插件。
+
+## 1.2.0
+
+- 音频参考合入主 Guide，只保留主加载器和主 Guide 两个节点。
+- 保留 AVref 稀疏绝对时间窗，第三路音频接口隐藏。
+- 更新两阶段示例；旧版三个独立 AVref 节点已移除。
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).

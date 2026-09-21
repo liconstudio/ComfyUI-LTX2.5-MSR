@@ -1,8 +1,8 @@
 {
-  "id": "17b37f23-b47a-4227-84ef-353d11271214",
-  "revision": 3,
-  "last_node_id": 104,
-  "last_link_id": 390,
+  "id": "c867b17e-9d07-4f5c-a33c-7f83e679157f",
+  "revision": 0,
+  "last_node_id": 105,
+  "last_link_id": 393,
   "nodes": [
     {
       "id": 25,
@@ -164,7 +164,8 @@
             244,
             246,
             323,
-            384
+            384,
+            391
           ]
         }
       ],
@@ -1485,7 +1486,7 @@
       ],
       "flags": {},
       "order": 11,
-      "mode": 0,
+      "mode": 4,
       "inputs": [
         {
           "label": "image",
@@ -1692,7 +1693,7 @@
         }
       },
       "widgets_values": [
-        "LTX25_MSR_AVref_Distilled8",
+        "video/LTX25_MSR_Main_AVref_Stage1",
         "auto",
         "auto"
       ]
@@ -1758,7 +1759,7 @@
     },
     {
       "id": 98,
-      "type": "ComfyUILTX25MSRAVrefICLoRALoader",
+      "type": "ComfyUILTX25MSRICLoRALoader",
       "pos": [
         520,
         270
@@ -1787,17 +1788,16 @@
           ]
         },
         {
-          "name": "avref_parameters",
-          "type": "LTX_MSR_AVREF_PARAMETERS",
+          "name": "msr_parameters",
+          "type": "LTX_MSR_REFERENCE_PARAMETERS",
           "links": [
             355,
-            367,
-            385
+            367
           ]
         }
       ],
       "properties": {
-        "Node name for S&R": "ComfyUILTX25MSRAVrefICLoRALoader",
+        "Node name for S&R": "ComfyUILTX25MSRICLoRALoader",
         "ue_properties": {
           "widget_ue_connectable": {},
           "input_ue_unconnectable": {},
@@ -1805,9 +1805,10 @@
         }
       },
       "widgets_values": [
-        "ltx2.5\\LTX-2.5-Licon-MSR-AVref.safetensors",
+        "ltx2.5\\S4_AV_13500.safetensors",
         1
-      ]
+      ],
+      "title": "MSR / AVref IC-LoRA Loader"
     },
     {
       "id": 23,
@@ -2174,19 +2175,19 @@
     },
     {
       "id": 100,
-      "type": "ComfyUILTX25MSRAVrefMultiReferenceGuide",
+      "type": "ComfyUILTX25MSRMultiReferenceGuide",
       "pos": [
         3300,
         1500
       ],
       "size": [
         440,
-        370
+        390
       ],
       "flags": {},
       "order": 40,
       "mode": 0,
-      "title": "Stage 2 - Reuse MSR-AVref References",
+      "title": "Stage 2 - Main MSR Guide + Same Audio References",
       "inputs": [
         {
           "name": "positive",
@@ -2238,15 +2239,22 @@
           "link": 370
         },
         {
-          "name": "avref_parameters",
-          "type": "LTX_MSR_AVREF_PARAMETERS",
-          "link": 367
+          "name": "msr_parameters",
+          "type": "LTX_MSR_REFERENCE_PARAMETERS",
+          "link": 367,
+          "shape": 7
         },
         {
-          "name": "audio_references",
+          "name": "audio_ref1",
           "shape": 7,
-          "type": "LTX_MSR_AVREF_AUDIO_REFERENCES",
+          "type": "LATENT",
           "link": 390
+        },
+        {
+          "name": "audio_ref2",
+          "shape": 7,
+          "type": "LATENT",
+          "link": 393
         }
       ],
       "outputs": [
@@ -2273,7 +2281,7 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "ComfyUILTX25MSRAVrefMultiReferenceGuide",
+        "Node name for S&R": "ComfyUILTX25MSRMultiReferenceGuide",
         "ue_properties": {
           "widget_ue_connectable": {},
           "input_ue_unconnectable": {},
@@ -2806,19 +2814,19 @@
     },
     {
       "id": 99,
-      "type": "ComfyUILTX25MSRAVrefMultiReferenceGuide",
+      "type": "ComfyUILTX25MSRMultiReferenceGuide",
       "pos": [
         1330,
         -30
       ],
       "size": [
         440,
-        370
+        390
       ],
       "flags": {},
       "order": 28,
       "mode": 0,
-      "title": "Stage 1 - MSR-AVref References",
+      "title": "Stage 1 - Main MSR Guide + Audio References",
       "inputs": [
         {
           "name": "positive",
@@ -2870,15 +2878,22 @@
           "link": 352
         },
         {
-          "name": "avref_parameters",
-          "type": "LTX_MSR_AVREF_PARAMETERS",
-          "link": 355
+          "name": "msr_parameters",
+          "type": "LTX_MSR_REFERENCE_PARAMETERS",
+          "link": 355,
+          "shape": 7
         },
         {
-          "name": "audio_references",
+          "name": "audio_ref1",
           "shape": 7,
-          "type": "LTX_MSR_AVREF_AUDIO_REFERENCES",
+          "type": "LATENT",
           "link": 389
+        },
+        {
+          "name": "audio_ref2",
+          "shape": 7,
+          "type": "LATENT",
+          "link": 392
         }
       ],
       "outputs": [
@@ -2907,7 +2922,7 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "ComfyUILTX25MSRAVrefMultiReferenceGuide",
+        "Node name for S&R": "ComfyUILTX25MSRMultiReferenceGuide",
         "ue_properties": {
           "widget_ue_connectable": {},
           "input_ue_unconnectable": {},
@@ -3001,7 +3016,7 @@
         }
       },
       "widgets_values": [
-        "video/LTX25_MSR_AVref_DualStage_x2",
+        "video/LTX25_MSR_Main_AVref_Stage2_x2",
         "auto",
         "auto"
       ]
@@ -3089,103 +3104,97 @@
       ]
     },
     {
-      "id": 103,
-      "type": "LoadAudio",
+      "id": 104,
+      "type": "LTXVAudioVAEEncode",
       "pos": [
-        -1350,
-        -600
+        -820,
+        -1060
       ],
       "size": [
         400,
-        180
+        80
       ],
       "flags": {},
       "order": 53,
       "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "AUDIO",
-          "type": "AUDIO",
-          "links": [
-            388
-          ]
-        }
-      ],
-      "title": "audio_ref3 → pic3",
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.16.3",
-        "Node name for S&R": "LoadAudio",
-        "ue_properties": {
-          "widget_ue_connectable": {},
-          "input_ue_unconnectable": {},
-          "version": "7.8"
-        }
-      },
-      "widgets_values": [
-        "0003.mp4",
-        null,
-        null
-      ]
-    },
-    {
-      "id": 104,
-      "type": "ComfyUILTX25MSRAVrefAudioEncoder",
-      "pos": [
-        -820,
-        -850
-      ],
-      "size": [
-        460,
-        230
-      ],
-      "flags": {},
-      "order": 54,
-      "mode": 0,
       "inputs": [
         {
-          "name": "audio_vae",
-          "type": "VAE",
-          "link": 384
-        },
-        {
-          "name": "avref_parameters",
-          "type": "LTX_MSR_AVREF_PARAMETERS",
-          "link": 385
-        },
-        {
-          "name": "audio_ref1",
-          "shape": 7,
+          "name": "audio",
           "type": "AUDIO",
           "link": 386
         },
         {
-          "name": "audio_ref2",
-          "shape": 7,
-          "type": "AUDIO",
-          "link": 387
-        },
-        {
-          "name": "audio_ref3",
-          "shape": 7,
-          "type": "AUDIO",
-          "link": 388
+          "label": "Audio VAE",
+          "name": "audio_vae",
+          "type": "VAE",
+          "link": 384
         }
       ],
       "outputs": [
         {
-          "name": "audio_references",
-          "type": "LTX_MSR_AVREF_AUDIO_REFERENCES",
+          "name": "Audio Latent",
+          "type": "LATENT",
           "links": [
             389,
             390
           ]
         }
       ],
-      "title": "Encode once; reuse in Stage 1 + Stage 2",
+      "title": "Encode audio_ref1; reuse in Stage 1 + Stage 2",
       "properties": {
-        "Node name for S&R": "ComfyUILTX25MSRAVrefAudioEncoder",
+        "cnr_id": "comfy-core",
+        "ver": "0.32.0",
+        "Node name for S&R": "LTXVAudioVAEEncode",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.8"
+        }
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 105,
+      "type": "LTXVAudioVAEEncode",
+      "pos": [
+        -820,
+        -810
+      ],
+      "size": [
+        400,
+        80
+      ],
+      "flags": {},
+      "order": 54,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 387
+        },
+        {
+          "label": "Audio VAE",
+          "name": "audio_vae",
+          "type": "VAE",
+          "link": 391
+        }
+      ],
+      "outputs": [
+        {
+          "name": "Audio Latent",
+          "type": "LATENT",
+          "links": [
+            392,
+            393
+          ]
+        }
+      ],
+      "title": "Encode audio_ref2; reuse in Stage 1 + Stage 2",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.32.0",
+        "Node name for S&R": "LTXVAudioVAEEncode",
         "ue_properties": {
           "widget_ue_connectable": {},
           "input_ue_unconnectable": {},
@@ -3730,7 +3739,7 @@
       1,
       99,
       9,
-      "LTX_MSR_AVREF_PARAMETERS"
+      "LTX_MSR_REFERENCE_PARAMETERS"
     ],
     [
       356,
@@ -3802,7 +3811,7 @@
       1,
       100,
       9,
-      "LTX_MSR_AVREF_PARAMETERS"
+      "LTX_MSR_REFERENCE_PARAMETERS"
     ],
     [
       370,
@@ -3913,39 +3922,23 @@
       67,
       0,
       104,
-      0,
+      1,
       "VAE"
-    ],
-    [
-      385,
-      98,
-      1,
-      104,
-      1,
-      "LTX_MSR_AVREF_PARAMETERS"
     ],
     [
       386,
       101,
       0,
       104,
-      2,
+      0,
       "AUDIO"
     ],
     [
       387,
       102,
       0,
-      104,
-      3,
-      "AUDIO"
-    ],
-    [
-      388,
-      103,
+      105,
       0,
-      104,
-      4,
       "AUDIO"
     ],
     [
@@ -3954,7 +3947,7 @@
       0,
       99,
       10,
-      "LTX_MSR_AVREF_AUDIO_REFERENCES"
+      "LATENT"
     ],
     [
       390,
@@ -3962,7 +3955,31 @@
       0,
       100,
       10,
-      "LTX_MSR_AVREF_AUDIO_REFERENCES"
+      "LATENT"
+    ],
+    [
+      391,
+      67,
+      0,
+      105,
+      1,
+      "VAE"
+    ],
+    [
+      392,
+      105,
+      0,
+      99,
+      11,
+      "LATENT"
+    ],
+    [
+      393,
+      105,
+      0,
+      100,
+      11,
+      "LATENT"
     ]
   ],
   "groups": [
@@ -3980,7 +3997,7 @@
     },
     {
       "id": 2,
-      "title": "MSR-AVref audio_refN → picN (disconnect missing audio)",
+      "title": "Audio LATENT -> Main Guide (audio_ref1 / audio_ref2)",
       "bounding": [
         -1410,
         -1160,

@@ -15,7 +15,7 @@ sys.argv = [original_argv[0], "--cpu"]
 import comfy.options
 
 comfy.options.enable_args_parsing()
-PLUGIN_FILE = pathlib.Path(__file__).resolve().parents[1] / "avref_nodes.py"
+PLUGIN_FILE = pathlib.Path(__file__).resolve().parents[1] / "nodes.py"
 SPEC = importlib.util.spec_from_file_location("ltx_msr_avref_nodes", PLUGIN_FILE)
 PLUGIN = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PLUGIN)
@@ -25,21 +25,20 @@ from comfy.ldm.lightricks.symmetric_patchifier import AudioPatchifier
 
 
 class MSRAVRefCPUTests(unittest.TestCase):
-    def test_three_unique_nodes_are_registered(self):
+    def test_two_unified_nodes_are_registered(self):
         self.assertEqual(
             set(PLUGIN.NODE_CLASS_MAPPINGS),
             {
-                "ComfyUILTX25MSRAVrefICLoRALoader",
-                "ComfyUILTX25MSRAVrefAudioEncoder",
-                "ComfyUILTX25MSRAVrefMultiReferenceGuide",
+                "ComfyUILTX25MSRICLoRALoader",
+                "ComfyUILTX25MSRMultiReferenceGuide",
             },
         )
-        encoder_inputs = {
+        guide_inputs = {
             item.id
-            for item in PLUGIN.ComfyUILTX25MSRAVrefAudioEncoder.define_schema().inputs
+            for item in PLUGIN.ComfyUILTX25MSRMultiReferenceGuide.define_schema().inputs
         }
-        self.assertTrue({"audio_ref1", "audio_ref2"} <= encoder_inputs)
-        self.assertNotIn("audio_ref3", encoder_inputs)
+        self.assertTrue({"audio_ref1", "audio_ref2"} <= guide_inputs)
+        self.assertNotIn("audio_ref3", guide_inputs)
 
     def test_image_and_audio_slot_tensors_are_removed_from_normal_lora(self):
         lora = {
@@ -160,25 +159,15 @@ class MSRAVRefCPUTests(unittest.TestCase):
         params = {"lora_name": "stage4.safetensors"}
         image = torch.zeros(1, 8, 8, 3)
         with self.assertRaisesRegex(ValueError, "pic3"):
-            PLUGIN.ComfyUILTX25MSRAVrefMultiReferenceGuide._validate_audio_image_mapping(
+            PLUGIN.ComfyUILTX25MSRMultiReferenceGuide._validate_audio_image_mapping(
                 payload, params, image, image, None, None
             )
 
-        PLUGIN.ComfyUILTX25MSRAVrefMultiReferenceGuide._validate_audio_image_mapping(
+        PLUGIN.ComfyUILTX25MSRMultiReferenceGuide._validate_audio_image_mapping(
             payload, params, image, image, image, None
         )
 
-    def test_encoder_preserves_sparse_slot_ids_and_truncates(self):
-        class FakeAudioVAE:
-            audio_sample_rate = 16000
-
-            @staticmethod
-            def encode(waveform):
-                self_shape = waveform.shape
-                if self_shape[0] != 1:
-                    raise AssertionError("unexpected batch")
-                return torch.zeros(1, 8, 126, 16)
-
+    def test_native_latents_preserve_sparse_slot_ids_and_truncate(self):
         state = {
             "frequencies": torch.ones(16),
             "net.0.weight": torch.zeros(256, 33),
@@ -193,11 +182,10 @@ class MSRAVRefCPUTests(unittest.TestCase):
             "audio_slot_state": state,
             "lora_name": "stage4.safetensors",
         }
-        audio = {"waveform": torch.zeros(1, 1, 16000), "sample_rate": 16000}
-        output = PLUGIN.ComfyUILTX25MSRAVrefAudioEncoder.execute(
-            FakeAudioVAE(), params, audio_ref1=audio, audio_ref3=audio
+        audio = {"samples": torch.zeros(1, 8, 126, 16)}
+        payload = PLUGIN._audio_latents_to_references(
+            (audio, None, audio), params
         )
-        payload = output.result[0]
         self.assertEqual([block["slot_id"] for block in payload["blocks"]], [1, 3])
         self.assertEqual([block["tokens"].shape[1] for block in payload["blocks"]], [125, 125])
 

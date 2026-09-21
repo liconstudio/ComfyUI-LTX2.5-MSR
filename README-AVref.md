@@ -1,136 +1,75 @@
-# ComfyUI-LTX2.5-MSR-AVref
+# 主节点中的 AVref 音频参考
 
-这是合并到 `ComfyUI-LTX2.5-MSR` 中的 AVref 功能。它保留原插件的多参考图逻辑，并增加三个固定编号的参考音频槽位，复现 Stage4 训练使用的稀疏绝对时间窗布局。
+AVref 已合并到 `ComfyUI-LTX2.5-MSR` 的两个主节点：
 
-原版两个节点保持不变，新增三个 AVref 节点。独立 AVref 插件应停用，避免同名节点重复注册。
+- `ComfyUI-LTX2.5-MSR IC-LoRA Loader`（`ComfyUILTX25MSRICLoRALoader`）
+- `ComfyUI-LTX2.5-MSR Multi-Reference Guide`（`ComfyUILTX25MSRMultiReferenceGuide`）
 
-## 节点
+前端采用 VAref 的连接方式：音频由原生 `LTXV Audio VAE Encode` 编码为 LATENT，直接接入主 Guide。后端仍使用 AVref 的稀疏绝对时间窗，并未改成 VAref 的连续音频排列。
 
-### MSR-AVref IC-LoRA Loader
+## 连接方式
 
-节点 ID：`ComfyUILTX25MSRAVrefICLoRALoader`
+```text
+LTX-2.5 model -> MSR IC-LoRA Loader -> sampler model
+                         |
+                  msr_parameters
+                         |
+LoadAudio -> LTXV Audio VAE Encode -> Guide.audio_ref1  (对应 pic1)
+LoadAudio -> LTXV Audio VAE Encode -> Guide.audio_ref2  (对应 pic2)
+                         |
+positive/negative + Video VAE + video-only latent + pic1...pic4/background
+                         |
+             MSR Multi-Reference Guide (reference_frames=25)
+                         |
+                LTXVConcatAVLatent -> sampler
+                         |
+              LTXVSeparateAVLatent -> LTXVCropGuides -> decode
+```
 
-- 加载普通 LoRA 权重。
-- 从 checkpoint 中单独提取 `reference_slot_embedding.*`。
-- 单独提取 `reference_audio_slot_embedding.*`。
-- 安装仅针对 MSR-AVref conditioning 生效的 LTX audio position patch。
-- 输出 `MODEL` 和 `LTX_MSR_AVREF_PARAMETERS`。
+每个 `LTXV Audio VAE Encode` 需要连接 LTX Audio VAE。同一音频 LATENT 可以同时接入两阶段 Guide，避免重复 VAE 编码。不再需要独立的 AVref Audio Encoder 节点。
 
-加载器要求 checkpoint metadata 明确声明：
+Guide 界面显示 `audio_ref1` 和 `audio_ref2`，两路输入都可留空。第三路音频保持隐藏，后端保留该参数。连接音频时，编号图片必须连续，且 `audio_refN` 必须存在同编号 `picN`。
 
+## 空窗槽位逻辑
+
+每段音频按原始编号添加独立 audio slot embedding。缺失音频不会插入静音 token，不会重新编号，也不会让后续音频前移。每段音频在其时间窗内向右对齐，长度超过槽容量时从尾部截断，短音频不补齐。
+
+默认槽宽为 5 秒、末端 margin 为 0.04 秒，具体值读取 checkpoint metadata。图片总数包括 background。例如连接 `pic1`、`pic2`、`pic3`、`background`，只给 `pic2` 音频：
+
+```text
+pic1       -> 空窗 [-20.04, -15.04]
+audio_ref2 -> 窗口 [-15.04, -10.04]，音频末端对齐 -10.04
+pic3       -> 空窗 [-10.04,  -5.04]
+background -> 空窗 [ -5.04,  -0.04]
+target audio starts at 0
+```
+
+目标音频位置不变。参考音频使用 timestep 0，模型输出时自动移除；图像参考仍通过采样后的 `LTXVCropGuides` 移除。不要再串接会覆盖 `ref_audio` 的原生 `LTXVReferenceAudio`。
+
+## 模型要求
+
+主加载器保留普通 MSR 的图像路径；识别到 AVref 权重/声明时，校验两套 slot embedding 和训练 metadata，并通过 ModelPatcher 安装音频时间坐标补丁。
+
+AVref 必须同时包含 `reference_slot_embedding.*` 和 `reference_audio_slot_embedding.*`（均支持 `diffusion_model.` 前缀）。两套 embedding 都包含 `frequencies`、`net.0.weight`、`net.0.bias`、`net.2.weight`、`net.2.bias`。
+
+要求 metadata 包含：
+
+- `reference_token_order=prepend`
+- `reference_slot_time_offsets=pic1_based_negative_time`
 - `reference_audio_conditioning=id_lora_clean_negative_rope`
 - `reference_audio_token_order=pic1_to_picN_then_target`
 - `reference_audio_rope_layout=absolute_image_slot_windows`
 - `reference_audio_overflow_mode=truncate`
+- `reference_audio_sparse_slots=true`
+- `reference_slot_embedding_enabled=true`
+- `reference_audio_slot_embedding_enabled=true`
 
-### Three Audio Reference Encoder
+AVref 图像参考必须设为 25 帧，即使没有连接参考音频。普通 MSR 仍支持 25/33 帧；未连接 MSR 参数时，原标准图像引导路径保留。
 
-节点 ID：`ComfyUILTX25MSRAVrefAudioEncoder`
+## 旧工作流与示例
 
-输入原生 ComfyUI `AUDIO` 和 LTX Audio VAE。当前界面显示 `audio_ref1`、`audio_ref2`；`audio_ref3` 按原配置保持隐藏，后端保留该参数。槽位映射如下：
+本插件只注册主加载器和主 Guide 两个节点。旧版三个 `ComfyUILTX25MSRAVref...` 节点已删除，不保留兼容注册。旧 AVref 工作流需替换为上面的主节点和原生音频编码器连接方式，参数统一为 `LTX_MSR_REFERENCE_PARAMETERS`。独立 `ComfyUI-LTX2.5-MSR-AVref.disabled` 目录继续停用。
 
-- `audio_ref1` 对应 `pic1`
-- `audio_ref2` 对应 `pic2`
-- `audio_ref3` 对应 `pic3`
+`LTX2.5-MSR-AVref-sample-workflow.json` 已改用主加载器、主 Guide 和两路原生音频编码器，第三路音频接口隐藏。请替换其中的模型、LoRA、图片和音频文件。示例的 KJNodes、rgthree、PromptRelay 等辅助节点仍需相应插件；本插件核心节点不依赖这些插件。
 
-可见接口均可留空，但至少连接一个。某张参考图没有参考音频时，直接不连接同编号接口。缺失槽位不会插入静音 token，也不会导致后续音频重新编号。
-
-每段音频经 Audio VAE 编码为 `[B,T,128]` token，再叠加 checkpoint 中同编号的独立 audio slot embedding。超过 5 秒槽容量的 latent token 从尾部截断；短音频不补齐。
-
-编码结果是可复用 payload。同一个 payload 可以同时连接两阶段工作流中的两个 Guide，避免重复运行 Audio VAE。
-
-### Multi-Reference Guide
-
-节点 ID：`ComfyUILTX25MSRAVrefMultiReferenceGuide`
-
-保留原插件的 `pic1`、可选 `pic2`–`pic4`、可选 `background`、居中缩放/裁切、白边适配、图像 slot embedding 和负时间 guide 逻辑。
-
-AVref checkpoint 的参考图固定编码为 25 帧。连接 audio payload 后，Guide 会验证每个 `audio_refN` 都存在同编号 `picN`，并以实际参考图总数计算音频时间窗。
-
-例如存在四张参考图，只连接 `audio_ref1` 和 `audio_ref3`：
-
-```text
-audio_ref1 -> pic1 window [-20.04, -15.04]
-audio_ref2 -> empty window [-15.04, -10.04]
-audio_ref3 -> pic3 window [-10.04,  -5.04]
-pic4       -> empty window [ -5.04,  -0.04]
-target audio starts at 0
-```
-
-各参考音频在自己的 5 秒窗口内向右对齐，末端保留 0.04 秒 margin。所有已连接参考音频按 slot 编号升序放在目标音频 token 之前，使用 timestep 0，并在模型输出时自动移除。
-
-## 基本连接顺序
-
-```text
-Native LTX-2.5 model loader
-  -> MSR-AVref IC-LoRA Loader
-  -> sampler model input
-
-LTX Audio VAE + audio_ref1/2/3 + AVref parameters
-  -> Three Audio Reference Encoder
-  -> audio_references
-
-positive/negative + Video VAE + video-only latent
-+ pic1...pic4/background + AVref parameters + audio_references
-  -> MSR-AVref Multi-Reference Guide
-  -> LTXVConcatAVLatent
-  -> native sampler
-  -> LTXVSeparateAVLatent
-  -> LTXVCropGuides for the video latent
-  -> video/audio decode
-```
-
-Guide 必须在 `LTXVConcatAVLatent` 之前接收 video-only latent。音频参考不是 AV latent 的一部分，因此不需要额外 crop；参考图仍需在采样后通过 `LTXVCropGuides` 移除。
-
-不要再串接原生 `LTXVReferenceAudio`。原生节点会覆盖 `ref_audio`，并把多个参考排成连续负时间流，不符合本 checkpoint 的固定稀疏槽位训练布局。
-
-## Sample workflow
-
-插件目录内提供：
-
-```text
-LTX2.5-MSR-AVref-sample-workflow.json
-```
-
-它沿用原 MSR 的双阶段采样结构，并新增三条固定映射：
-
-```text
-LoadAudio 0001.mp4 -> audio_ref1 -> pic1
-LoadAudio 0002.mp4 -> audio_ref2 -> pic2
-LoadAudio 0003.mp4 -> audio_ref3 -> pic3
-```
-
-示例保留三路音频结构；当前界面隐藏第三路输入，请按实际可见接口调整连接。参考音频只经过一次 Audio VAE 编码，输出同时复用到 Stage 1 和 Stage 2 Guide。示例已启用第三张参考图以匹配 `audio_ref3`。请将示例中的 LoRA、图片和音频文件替换为实际文件；某个 `picN` 没有参考音频时，断开同编号 `audio_refN`，不要接静音、不要把后续音频前移补位。
-
-## 安装
-
-目录应为：
-
-```text
-ComfyUI/custom_nodes/ComfyUI-LTX2.5-MSR
-```
-
-本插件不引入额外依赖，使用 ComfyUI 原生 LTX-2.5、Audio VAE、AUDIO、AV latent 和 sampler 实现。安装后完整重启 ComfyUI。
-
-## checkpoint key
-
-图像和音频 embedding 均兼容带或不带 `diffusion_model.` 的 key：
-
-```text
-diffusion_model.reference_slot_embedding.*
-reference_slot_embedding.*
-diffusion_model.reference_audio_slot_embedding.*
-reference_audio_slot_embedding.*
-```
-
-两套 embedding 都必须包含：
-
-```text
-frequencies
-net.0.weight
-net.0.bias
-net.2.weight
-net.2.bias
-```
-
-当前 Stage4 checkpoint 的图像和音频输出维度均为 128。
+安装后完整重启 ComfyUI。

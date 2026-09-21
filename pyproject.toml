@@ -1,6 +1,6 @@
 [project]
 name = "ltx2.5-msr"
-version = "1.1.0"
+version = "1.2.0"
 description = "Multi-reference image and optional AVref audio conditioning nodes for LTX-2.5 in ComfyUI."
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"

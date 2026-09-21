@@ -1,4 +1,5 @@
 import logging
+import types
 
 import comfy.sd
 import comfy.utils
@@ -7,13 +8,22 @@ import folder_paths
 import node_helpers
 import torch
 from comfy_api.latest import io
+from comfy.patcher_extension import CallbacksMP
 
 
 MSRReferenceParameters = io.Custom("LTX_MSR_REFERENCE_PARAMETERS")
-_SLOT_PREFIXES = (
+_IMAGE_SLOT_PREFIXES = (
     "diffusion_model.reference_slot_embedding.",
     "reference_slot_embedding.",
 )
+_AUDIO_SLOT_PREFIXES = (
+    "diffusion_model.reference_audio_slot_embedding.",
+    "reference_audio_slot_embedding.",
+)
+_AVREF_LAYOUT_MARKER = "ltx_msr_avref_absolute_slots_v1"
+_PROCESS_INPUT_PATCH_MARKER = "_ltx_msr_avref_process_input_patch"
+_PROCESS_INPUT_PATCH_PATH = "diffusion_model._process_input"
+_REBIND_CALLBACK_KEY = "ltx_msr_avref_rebind_process_input"
 
 
 def _metadata_bool(metadata, key, default=False):
@@ -23,22 +33,29 @@ def _metadata_bool(metadata, key, default=False):
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _extract_slot_state(lora):
-    state = {}
+def _extract_slot_states(lora):
+    image_state = {}
+    audio_state = {}
     normal_lora = {}
     for key, value in lora.items():
         matched = False
-        for prefix in _SLOT_PREFIXES:
+        for prefix in _IMAGE_SLOT_PREFIXES:
             if key.startswith(prefix):
-                state[key[len(prefix) :]] = value.detach().cpu()
+                image_state[key[len(prefix) :]] = value.detach().cpu()
                 matched = True
                 break
         if not matched:
+            for prefix in _AUDIO_SLOT_PREFIXES:
+                if key.startswith(prefix):
+                    audio_state[key[len(prefix) :]] = value.detach().cpu()
+                    matched = True
+                    break
+        if not matched:
             normal_lora[key] = value
-    return normal_lora, state
+    return normal_lora, image_state, audio_state
 
 
-def _validate_slot_state(state, metadata):
+def _validate_slot_state(state, metadata, *, audio=False):
     required = {
         "frequencies",
         "net.0.weight",
@@ -47,17 +64,92 @@ def _validate_slot_state(state, metadata):
         "net.2.bias",
     }
     missing = sorted(required.difference(state))
-    enabled = _metadata_bool(metadata, "reference_slot_embedding_enabled", bool(state))
+    prefix = "reference_audio" if audio else "reference"
+    label = "audio reference" if audio else "image reference"
+    enabled = _metadata_bool(metadata, f"{prefix}_slot_embedding_enabled", bool(state))
     if enabled and missing:
         raise ValueError(
-            "MSR LoRA declares reference slot embeddings, but these tensors are missing: "
+            f"The MSR LoRA declares {label} slot embeddings, but these tensors "
+            "are missing: "
             + ", ".join(missing)
         )
     if not state:
         raise ValueError(
-            "This LoRA does not contain reference_slot_embedding weights and is not an "
-            "MSR multi-reference checkpoint."
+            f"This LoRA does not contain {prefix}_slot_embedding weights and is not a "
+            "compatible MSR checkpoint."
         )
+    if missing:
+        raise ValueError(f"Incomplete {label} slot embedding: " + ", ".join(missing))
+
+    frequencies = state["frequencies"]
+    weight0 = state["net.0.weight"]
+    bias0 = state["net.0.bias"]
+    weight2 = state["net.2.weight"]
+    bias2 = state["net.2.bias"]
+    expected_features = 1 + 2 * frequencies.numel()
+    if frequencies.ndim != 1 or weight0.ndim != 2 or weight0.shape[1] != expected_features:
+        raise ValueError(f"Invalid {label} Fourier-MLP input shape.")
+    if bias0.shape != weight0.shape[:1] or weight2.ndim != 2 or weight2.shape[1] != weight0.shape[0]:
+        raise ValueError(f"Invalid {label} Fourier-MLP hidden shape.")
+    if bias2.shape != weight2.shape[:1]:
+        raise ValueError(f"Invalid {label} Fourier-MLP output shape.")
+
+    metadata_dim = metadata.get(f"{prefix}_slot_embedding_dim")
+    if metadata_dim is not None and int(float(metadata_dim)) != bias2.numel():
+        raise ValueError(
+            f"{label.title()} slot dimension in metadata ({metadata_dim}) does not match "
+            f"the checkpoint ({bias2.numel()})."
+        )
+    metadata_type = metadata.get(f"{prefix}_slot_embedding_type")
+    if metadata_type is not None and str(metadata_type).strip() != "fourier_mlp":
+        raise ValueError(
+            f"Unsupported {label} slot embedding type {metadata_type!r}; "
+            "expected 'fourier_mlp'."
+        )
+
+
+def _metadata_float(metadata, key, default):
+    try:
+        return float(metadata.get(key, default))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid numeric LoRA metadata {key}={metadata.get(key)!r}.") from exc
+
+
+def _validate_avref_metadata(metadata):
+    expected = {
+        "reference_token_order": "prepend",
+        "reference_slot_time_offsets": "pic1_based_negative_time",
+        "reference_audio_conditioning": "id_lora_clean_negative_rope",
+        "reference_audio_token_order": "pic1_to_picN_then_target",
+        "reference_audio_rope_layout": "absolute_image_slot_windows",
+        "reference_audio_overflow_mode": "truncate",
+    }
+    for key, expected_value in expected.items():
+        actual = metadata.get(key)
+        if actual is None:
+            raise ValueError(
+                f"The selected LoRA is missing required MSR-AVref metadata: {key}."
+            )
+        if str(actual).strip() != expected_value:
+            raise ValueError(
+                f"Unsupported {key}={actual!r}; expected {expected_value!r}."
+            )
+    if not _metadata_bool(metadata, "reference_audio_sparse_slots", False):
+        raise ValueError("The selected LoRA does not declare sparse absolute audio slots.")
+    if not _metadata_bool(metadata, "reference_slot_embedding_enabled", False):
+        raise ValueError("The selected LoRA does not enable image reference slot embeddings.")
+    if not _metadata_bool(metadata, "reference_audio_slot_embedding_enabled", False):
+        raise ValueError("The selected LoRA does not enable audio reference slot embeddings.")
+
+    slot_duration = _metadata_float(
+        metadata, "reference_audio_slot_duration_seconds", 5.0
+    )
+    end_margin = _metadata_float(
+        metadata, "reference_audio_end_margin_seconds", 0.04
+    )
+    if slot_duration <= 0 or end_margin <= 0:
+        raise ValueError("Audio slot duration and end margin must both be positive.")
+    return slot_duration, end_margin
 
 
 def _slot_embedding(slot_id, state, device, dtype):
@@ -96,6 +188,296 @@ def _append_attention_entry(conditioning, pre_filter_count, latent_shape, streng
     )
 
 
+def _maximum_audio_tokens(patchifier, slot_duration):
+    if not getattr(patchifier, "start_end", False):
+        raise ValueError("LTX MSR-AVref requires an AudioPatchifier with start/end coordinates.")
+    token_seconds = (
+        patchifier.hop_length
+        * patchifier.audio_latent_downsample_factor
+        / patchifier.sample_rate
+    )
+    probe_count = max(8, int(slot_duration / token_seconds) + 8)
+    ends = patchifier._get_audio_latent_time_in_sec(
+        1, probe_count + 1, torch.float32, torch.device("cpu")
+    )
+    return max(1, int((ends <= slot_duration + 1e-6).sum().item()))
+
+
+def _is_avref_process_input_patch(value):
+    function = getattr(value, "__func__", value)
+    return bool(getattr(function, _PROCESS_INPUT_PATCH_MARKER, False))
+
+
+def _make_avref_process_input_patch(original_process_input):
+    if isinstance(original_process_input, types.MethodType):
+        original_callable = original_process_input.__func__
+        original_needs_model = True
+    else:
+        original_callable = original_process_input
+        original_needs_model = False
+
+    def process_input(diffusion_model, x, keyframe_idxs, denoise_mask, **kwargs):
+        ref_audio = kwargs.get("ref_audio")
+        if not isinstance(ref_audio, dict) or ref_audio.get("layout_marker") != _AVREF_LAYOUT_MARKER:
+            if original_needs_model:
+                return original_callable(
+                    diffusion_model, x, keyframe_idxs, denoise_mask, **kwargs
+                )
+            return original_callable(x, keyframe_idxs, denoise_mask, **kwargs)
+
+        if original_needs_model:
+            result = original_callable(
+                diffusion_model, x, keyframe_idxs, denoise_mask, **kwargs
+            )
+        else:
+            result = original_callable(x, keyframe_idxs, denoise_mask, **kwargs)
+        processed_latents, processed_positions, additional_args = result
+        vx, ax = processed_latents
+        video_positions, audio_positions = processed_positions
+
+        slot_ids = tuple(int(value) for value in ref_audio.get("slot_ids", ()))
+        slot_lengths = tuple(int(value) for value in ref_audio.get("slot_lengths", ()))
+        image_slot_count = int(ref_audio.get("image_slot_count", 0))
+        slot_duration = float(ref_audio.get("slot_duration_seconds", 0.0))
+        end_margin = float(ref_audio.get("end_margin_seconds", 0.0))
+        if not slot_ids or len(slot_ids) != len(slot_lengths):
+            raise ValueError("Invalid MSR-AVref audio slot metadata.")
+        if tuple(sorted(set(slot_ids))) != slot_ids:
+            raise ValueError("MSR-AVref audio slots must be unique and in ascending order.")
+        if any(length <= 0 for length in slot_lengths):
+            raise ValueError("MSR-AVref audio slot lengths must be positive.")
+        if image_slot_count < 1 or any(slot_id < 1 or slot_id > image_slot_count for slot_id in slot_ids):
+            raise ValueError("A connected audio reference has no matching image slot.")
+        if slot_duration <= 0 or end_margin <= 0:
+            raise ValueError("Invalid MSR-AVref audio slot timing metadata.")
+
+        native_ref_length = int(additional_args.get("ref_audio_seq_len", 0))
+        if native_ref_length != sum(slot_lengths):
+            raise ValueError(
+                "The native LTX reference-audio length does not match the MSR-AVref payload."
+            )
+        if audio_positions.shape[2] < native_ref_length or ax.shape[1] < native_ref_length:
+            raise ValueError("The native LTX model returned an invalid reference-audio prefix.")
+
+        batch_size = ax.shape[0]
+        cursor = 0
+        reference_latents = []
+        reference_positions = []
+        for slot_id, slot_length in zip(slot_ids, slot_lengths):
+            block = ax[:, cursor : cursor + slot_length]
+            dummy = torch.empty(
+                (batch_size, 1, slot_length, 1),
+                device=ax.device,
+                dtype=torch.float32,
+            )
+            _, local_positions = diffusion_model.a_patchifier.patchify(dummy)
+            local_end = local_positions[:, :, -1, 1]
+            slot_end = -((image_slot_count - slot_id) * slot_duration) - end_margin
+            shift = slot_end - local_end
+            local_positions = local_positions + shift[:, :, None, None]
+            reference_latents.append(block)
+            reference_positions.append(local_positions.to(audio_positions))
+            cursor += slot_length
+
+        target_ax = ax[:, native_ref_length:]
+        target_positions = audio_positions[:, :, native_ref_length:]
+        ax = torch.cat([*reference_latents, target_ax], dim=1)
+        audio_positions = torch.cat([*reference_positions, target_positions], dim=2)
+        additional_args = dict(additional_args)
+        additional_args["ref_audio_seq_len"] = sum(slot_lengths)
+        additional_args["target_audio_seq_len"] = target_ax.shape[1]
+        return [vx, ax], [video_positions, audio_positions], additional_args
+
+    setattr(process_input, _PROCESS_INPUT_PATCH_MARKER, True)
+    return process_input
+
+
+def _rebind_avref_process_input_on_clone(source_model, cloned_model):
+    if source_model.model is cloned_model.model:
+        return
+    existing = cloned_model.object_patches.get(_PROCESS_INPUT_PATCH_PATH)
+    if not _is_avref_process_input_patch(existing):
+        return
+    diffusion_model = cloned_model.get_model_object("diffusion_model")
+    function = getattr(existing, "__func__", existing)
+    cloned_model.object_patches[_PROCESS_INPUT_PATCH_PATH] = types.MethodType(
+        function, diffusion_model
+    )
+
+
+def _install_avref_process_input_patch(model):
+    patched_model = model.clone()
+    diffusion_model = patched_model.get_model_object("diffusion_model")
+    patchifier = getattr(diffusion_model, "a_patchifier", None)
+    if patchifier is None:
+        raise ValueError("The loaded model is not an LTX audio/video diffusion model.")
+
+    current = patched_model.get_model_object(_PROCESS_INPUT_PATCH_PATH)
+    if not _is_avref_process_input_patch(current):
+        function = _make_avref_process_input_patch(current)
+        patched_model.add_object_patch(
+            _PROCESS_INPUT_PATCH_PATH, types.MethodType(function, diffusion_model)
+        )
+    if not patched_model.get_callbacks(CallbacksMP.ON_CLONE, _REBIND_CALLBACK_KEY):
+        patched_model.add_callback_with_key(
+            CallbacksMP.ON_CLONE,
+            _REBIND_CALLBACK_KEY,
+            _rebind_avref_process_input_on_clone,
+        )
+    return patched_model, patchifier
+
+
+def _load_avref_lora(
+    model, lora_name, strength_model, normal_lora, image_slot_state, audio_slot_state, metadata
+):
+    _validate_slot_state(image_slot_state, metadata, audio=False)
+    _validate_slot_state(audio_slot_state, metadata, audio=True)
+    slot_duration, end_margin = _validate_avref_metadata(metadata)
+
+    if strength_model != 0:
+        loaded_model, _ = comfy.sd.load_lora_for_models(
+            model,
+            None,
+            normal_lora,
+            strength_model,
+            0,
+            lora_metadata=metadata,
+        )
+    else:
+        loaded_model = model
+
+    loaded_model, patchifier = _install_avref_process_input_patch(loaded_model)
+    timing = {
+        "sample_rate": int(patchifier.sample_rate),
+        "hop_length": int(patchifier.hop_length),
+        "audio_latent_downsample_factor": int(
+            patchifier.audio_latent_downsample_factor
+        ),
+        "is_causal": bool(patchifier.is_causal),
+        "start_end": bool(patchifier.start_end),
+        "shift": int(patchifier.shift),
+        "patch_size": tuple(int(value) for value in patchifier.patch_size),
+    }
+    expected_timing = {
+        "sample_rate": 16000,
+        "hop_length": 160,
+        "audio_latent_downsample_factor": 4,
+        "is_causal": True,
+        "start_end": True,
+        "shift": 0,
+        "patch_size": (1, 1, 1),
+    }
+    if timing != expected_timing:
+        raise ValueError(
+            f"Unsupported LTX audio patchifier timing {timing}; expected {expected_timing}."
+        )
+    max_audio_tokens = _maximum_audio_tokens(patchifier, slot_duration)
+
+    params = {
+        "slot_state": image_slot_state,
+        "audio_slot_state": audio_slot_state,
+        "metadata": dict(metadata),
+        "lora_name": lora_name,
+        "reference_downscale_factor": max(
+            1, round(float(metadata.get("reference_downscale_factor", 1)))
+        ),
+        # ComfyUI compatibility mode intentionally uses its established
+        # guide coordinates for every checkpoint, including LoRAs whose
+        # training metadata records another temporal scale.
+        "reference_temporal_scale_factor": 1,
+        "reference_audio_slot_duration_seconds": slot_duration,
+        "reference_audio_end_margin_seconds": end_margin,
+        "reference_audio_max_tokens": max_audio_tokens,
+        "audio_patchifier_timing": timing,
+    }
+    logging.info(
+        "[LTX MSR-AVref] Loaded %s with image/audio slot embeddings (%d/%d tensors)",
+        lora_name,
+        len(image_slot_state),
+        len(audio_slot_state),
+    )
+    logging.info(
+        "[LTX MSR-AVref] image_dim=%d audio_dim=%d downscale=%d "
+        "audio_layout=absolute_image_slot_windows duration=%.3fs margin=%.3fs "
+        "max_audio_tokens=%d",
+        int(image_slot_state["net.2.bias"].numel()),
+        int(audio_slot_state["net.2.bias"].numel()),
+        params["reference_downscale_factor"],
+        slot_duration,
+        end_margin,
+        max_audio_tokens,
+    )
+    return loaded_model, params
+
+
+def _prepare_audio_tokens(selected, avref_parameters):
+    max_tokens = int(avref_parameters["reference_audio_max_tokens"])
+    audio_slot_state = avref_parameters["audio_slot_state"]
+    blocks = []
+    for slot_id, tokens in selected:
+        original_tokens = tokens.shape[1]
+        if tokens.shape[1] > max_tokens:
+            tokens = tokens[:, :max_tokens]
+            logging.warning(
+                "[LTX MSR-AVref] audio_ref%d truncated from %d to %d tokens "
+                "to fit its %.3fs slot.",
+                slot_id,
+                original_tokens,
+                max_tokens,
+                avref_parameters["reference_audio_slot_duration_seconds"],
+            )
+        embedding = _slot_embedding(
+            slot_id, audio_slot_state, tokens.device, tokens.dtype
+        )
+        if embedding.numel() != tokens.shape[-1]:
+            raise ValueError(
+                f"Audio slot embedding dimension {embedding.numel()} does not match "
+                f"audio_ref{slot_id} token dimension {tokens.shape[-1]}."
+            )
+        tokens = tokens + embedding.view(1, 1, -1)
+        blocks.append({"slot_id": slot_id, "tokens": tokens})
+        logging.info(
+            "[LTX MSR-AVref] audio_ref%d encoded: tokens=%d slot_embedding=applied",
+            slot_id,
+            tokens.shape[1],
+        )
+
+    payload = {
+        "layout_marker": _AVREF_LAYOUT_MARKER,
+        "blocks": tuple(blocks),
+        "lora_name": avref_parameters["lora_name"],
+        "slot_duration_seconds": avref_parameters[
+            "reference_audio_slot_duration_seconds"
+        ],
+        "end_margin_seconds": avref_parameters[
+            "reference_audio_end_margin_seconds"
+        ],
+    }
+    return payload
+
+
+def _audio_latents_to_references(audio_references, avref_parameters):
+    selected = []
+    for slot_id, audio_latent in enumerate(audio_references, start=1):
+        if audio_latent is None:
+            continue
+        latent = audio_latent.get("samples")
+        if not isinstance(latent, torch.Tensor) or latent.ndim != 4:
+            raise ValueError(
+                f"audio_ref{slot_id} must be an LTX audio latent shaped [B, C, T, F]."
+            )
+        batch, channels, time_steps, frequency_bins = latent.shape
+        if batch != 1 or time_steps < 1:
+            raise ValueError(f"audio_ref{slot_id} must contain one non-empty clip.")
+        tokens = latent.permute(0, 2, 1, 3).reshape(
+            batch, time_steps, channels * frequency_bins
+        )
+        selected.append((slot_id, tokens))
+    if not selected:
+        return None
+    return _prepare_audio_tokens(selected, avref_parameters)
+
+
 class ComfyUILTX25MSRICLoRALoader(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -104,8 +486,8 @@ class ComfyUILTX25MSRICLoRALoader(io.ComfyNode):
             display_name="ComfyUI-LTX2.5-MSR IC-LoRA Loader",
             category="ComfyUI-LTX2.5-MSR",
             description=(
-                "Loads an LTX MSR LoRA and extracts its learned Fourier-MLP reference "
-                "slot embedding for the Multi-Reference Guide node."
+                "Loads an LTX MSR or AVref LoRA and extracts its learned reference "
+                "slot embeddings. AVref checkpoints also enable sparse audio time windows."
             ),
             inputs=[
                 io.Model.Input("model"),
@@ -127,7 +509,15 @@ class ComfyUILTX25MSRICLoRALoader(io.ComfyNode):
             lora_path, safe_load=True, return_metadata=True
         )
         metadata = metadata or {}
-        normal_lora, slot_state = _extract_slot_state(lora)
+        normal_lora, slot_state, audio_slot_state = _extract_slot_states(lora)
+        if audio_slot_state or _metadata_bool(
+            metadata, "reference_audio_slot_embedding_enabled"
+        ) or metadata.get("reference_audio_conditioning"):
+            loaded_model, params = _load_avref_lora(
+                model, lora_name, strength_model,
+                normal_lora, slot_state, audio_slot_state, metadata,
+            )
+            return io.NodeOutput(loaded_model, params)
         _validate_slot_state(slot_state, metadata)
 
         if strength_model != 0:
@@ -182,7 +572,8 @@ class ComfyUILTX25MSRMultiReferenceGuide(io.ComfyNode):
             description=(
                 "Encodes pic1...pic4 and an optional background independently, applies the learned "
                 "slot embeddings, and appends clean guide tokens at the negative temporal "
-                "positions used during MSR training."
+                "positions used during MSR training. Optional audio LATENT inputs "
+                "use AVref absolute slot windows; AVref requires reference_frames=25."
             ),
             inputs=[
                 io.Conditioning.Input("positive"),
@@ -202,6 +593,14 @@ class ComfyUILTX25MSRMultiReferenceGuide(io.ComfyNode):
                         "When omitted, references are appended as standard LTX guides "
                         "without MSR slot embeddings or negative temporal offsets."
                     ),
+                ),
+                io.Latent.Input(
+                    "audio_ref1", optional=True,
+                    tooltip="LTXV Audio VAE Encode output for pic1. Requires an AVref LoRA and 25 reference frames.",
+                ),
+                io.Latent.Input(
+                    "audio_ref2", optional=True,
+                    tooltip="LTXV Audio VAE Encode output for pic2. Leave empty to preserve its audio time window.",
                 ),
                 io.Float.Input("strength", default=1.0, min=0.0, max=1.0, step=0.01),
                 io.Combo.Input("reference_frames", options=["25", "33"], default="33"),
@@ -256,8 +655,18 @@ class ComfyUILTX25MSRMultiReferenceGuide(io.ComfyNode):
         pic3=None,
         pic4=None,
         background=None,
+        audio_ref1=None,
+        audio_ref2=None,
+        audio_ref3=None,
         **legacy_inputs,
     ):
+        audio_latents = (audio_ref1, audio_ref2, audio_ref3)
+        has_audio = any(audio is not None for audio in audio_latents)
+        avref_enabled = msr_parameters is not None and "audio_slot_state" in msr_parameters
+        if has_audio and not avref_enabled:
+            raise ValueError(
+                "Audio references require an AVref LoRA loaded with the MSR IC-LoRA Loader."
+            )
         # Keep old workflows executable without exposing pic5 in the new UI.
         legacy_pic5 = legacy_inputs.pop("pic5", None)
         if legacy_inputs:
@@ -282,6 +691,15 @@ class ComfyUILTX25MSRMultiReferenceGuide(io.ComfyNode):
         if reference_frames not in (25, 33):
             raise ValueError(
                 f"reference_frames must be 25 or 33, got {reference_frames}."
+            )
+
+        if avref_enabled and reference_frames != 25:
+            raise ValueError("AVref checkpoints require reference_frames=25.")
+        audio_references = None
+        if has_audio:
+            audio_references = _audio_latents_to_references(audio_latents, msr_parameters)
+            cls._validate_audio_image_mapping(
+                audio_references, msr_parameters, pic1, pic2, pic3, pic4
             )
 
         # Workflows saved before the crop widget was removed still contain its
@@ -464,6 +882,11 @@ class ComfyUILTX25MSRMultiReferenceGuide(io.ComfyNode):
                 negative, token_count, original_shape, strength
             )
 
+        if audio_references is not None:
+            positive, negative = cls._attach_audio_references(
+                positive, negative, audio_references, msr_parameters, num_slots
+            )
+
         logging.info(
             "[LTX MSR] Guide complete: added=%d, order=pic1..pic%d, frames_each=%d, "
             "mode=%s, output_latent=%s",
@@ -478,6 +901,95 @@ class ComfyUILTX25MSRMultiReferenceGuide(io.ComfyNode):
             negative,
             {"samples": latent_image, "noise_mask": noise_mask},
         )
+
+    @staticmethod
+    def _validate_audio_image_mapping(
+        audio_references,
+        avref_parameters,
+        pic1,
+        pic2,
+        pic3,
+        pic4,
+    ):
+        if not isinstance(audio_references, dict):
+            raise ValueError("Invalid MSR-AVref audio-reference payload.")
+        if audio_references.get("layout_marker") != _AVREF_LAYOUT_MARKER:
+            raise ValueError("Invalid MSR-AVref audio-reference payload.")
+        if audio_references.get("lora_name") != avref_parameters.get("lora_name"):
+            raise ValueError(
+                "The audio references were encoded with a different MSR-AVref LoRA."
+            )
+
+        pictures = {1: pic1, 2: pic2, 3: pic3, 4: pic4}
+        present_picture_slots = [slot for slot, image in pictures.items() if image is not None]
+        if not present_picture_slots or present_picture_slots != list(
+            range(1, present_picture_slots[-1] + 1)
+        ):
+            raise ValueError(
+                "When audio references are used, numbered image inputs must be contiguous "
+                f"pic1..picN; found {present_picture_slots}."
+            )
+
+        audio_slots = [int(block["slot_id"]) for block in audio_references.get("blocks", ())]
+        if not audio_slots or audio_slots != sorted(set(audio_slots)):
+            raise ValueError("Audio reference slots must be unique and in ascending order.")
+        for slot_id in audio_slots:
+            if slot_id not in (1, 2, 3) or pictures[slot_id] is None:
+                raise ValueError(
+                    f"audio_ref{slot_id} is connected, but matching pic{slot_id} is not."
+                )
+
+    @staticmethod
+    def _attach_audio_references(
+        positive,
+        negative,
+        audio_references,
+        avref_parameters,
+        image_slot_count,
+    ):
+        blocks = audio_references["blocks"]
+        slot_ids = tuple(int(block["slot_id"]) for block in blocks)
+        tokens_by_slot = []
+        slot_lengths = []
+        for slot_id, block in zip(slot_ids, blocks):
+            tokens = block["tokens"]
+            if not isinstance(tokens, torch.Tensor) or tokens.ndim != 3:
+                raise ValueError(f"audio_ref{slot_id} tokens must be shaped [B, T, C].")
+            if tokens.shape[0] != 1 or tokens.shape[1] < 1:
+                raise ValueError(f"audio_ref{slot_id} must contain one non-empty clip.")
+            if slot_id > image_slot_count:
+                raise ValueError(f"audio_ref{slot_id} has no matching image slot.")
+            tokens_by_slot.append(tokens)
+            slot_lengths.append(int(tokens.shape[1]))
+
+        ref_tokens = torch.cat(tokens_by_slot, dim=1)
+        ref_audio = {
+            "layout_marker": _AVREF_LAYOUT_MARKER,
+            "tokens": ref_tokens,
+            "slot_ids": slot_ids,
+            "slot_lengths": tuple(slot_lengths),
+            "image_slot_count": int(image_slot_count),
+            "slot_duration_seconds": float(
+                avref_parameters["reference_audio_slot_duration_seconds"]
+            ),
+            "end_margin_seconds": float(
+                avref_parameters["reference_audio_end_margin_seconds"]
+            ),
+        }
+        positive = node_helpers.conditioning_set_values(
+            positive, {"ref_audio": ref_audio}
+        )
+        negative = node_helpers.conditioning_set_values(
+            negative, {"ref_audio": ref_audio}
+        )
+        logging.info(
+            "[LTX MSR-AVref] Attached audio slots=%s lengths=%s before target; "
+            "image_slot_count=%d",
+            slot_ids,
+            tuple(slot_lengths),
+            image_slot_count,
+        )
+        return positive, negative
 
     @staticmethod
     def _encode_reference(
