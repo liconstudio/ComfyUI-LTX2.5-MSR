@@ -129,6 +129,10 @@ For a two-stage workflow:
 
 Do not replace this path with `LTXVImgToVideoInplace`: that node re-encodes pixel-space images or videos and overwrites latent frames. The MSR refiner should retain the upscaled generated latent while rebuilding the high-resolution reference conditions.
 
+## Sample workflow
+
+[Download the V2 sample workflow](LTX2.5-MSR-sample-workflow-V2.json). It uses the main MSR loader and Guide, with native audio VAE encoding. The sample also uses KJNodes, rgthree and PromptRelay; select your own model, image and audio files after importing.
+
 ## LoRA compatibility
 
 Compatible MSR checkpoints must contain the learned slot-embedding tensors, including:
@@ -183,6 +187,10 @@ This repository implements only MSR-specific LoRA loading and multi-reference co
 插件只注册主加载器和主 Guide 两个节点。原独立 AVref 加载器、音频编码器和 Guide 已移除；旧 AVref 工作流需改用主节点及原生音频编码器。独立 AVref 插件继续停用。
 
 完整连接说明见 [AVref 说明](README-AVref.md)。
+
+## 1.2.2
+
+- 加入新版 `LTX2.5-MSR-sample-workflow-V2.json` 示例工作流。
 
 ## 1.2.1
 
