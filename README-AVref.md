@@ -66,10 +66,8 @@ AVref 必须同时包含 `reference_slot_embedding.*` 和 `reference_audio_slot_
 
 AVref 图像参考必须设为 25 帧，即使没有连接参考音频。普通 MSR 仍支持 25/33 帧；未连接 MSR 参数时，原标准图像引导路径保留。
 
-## 旧工作流与示例
+## 旧工作流
 
 本插件只注册主加载器和主 Guide 两个节点。旧版三个 `ComfyUILTX25MSRAVref...` 节点已删除，不保留兼容注册。旧 AVref 工作流需替换为上面的主节点和原生音频编码器连接方式，参数统一为 `LTX_MSR_REFERENCE_PARAMETERS`。独立 `ComfyUI-LTX2.5-MSR-AVref.disabled` 目录继续停用。
-
-`LTX2.5-MSR-AVref-sample-workflow.json` 已改用主加载器、主 Guide 和两路原生音频编码器，第三路音频接口隐藏。请替换其中的模型、LoRA、图片和音频文件。示例的 KJNodes、rgthree、PromptRelay 等辅助节点仍需相应插件；本插件核心节点不依赖这些插件。
 
 安装后完整重启 ComfyUI。
