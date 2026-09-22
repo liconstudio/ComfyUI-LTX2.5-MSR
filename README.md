@@ -1,11 +1,11 @@
 # ComfyUI-LTX2.5-MSR
 
-## 新版变化（v1.2.2）
+## What's new in v1.2.2
 
-- **新增音频参考**：主 Reference Guide 可直接接入两路音频参考，分别对应 `pic1`、`pic2`，使用配套 AVref LoRA。
-- **统一节点**：图像和音频参考共用一套 LoRA 加载器与 Reference Guide。
-- **保留音频空窗**：某路音频不连接时保留对应时间槽位，后续音频不会前移补位。参考图帧数可选 25 或 33。
-- **新版示例工作流**：提供 [V2 工作流](LTX2.5-MSR-sample-workflow-V2.json)，展示两阶段采样与音频参考的连接方式。
+- **Audio references:** Connect two reference audio latents directly to the main Reference Guide, paired with `pic1` and `pic2`, using a compatible AVref LoRA.
+- **Unified nodes:** Use one LoRA loader and one Reference Guide for both image and audio references.
+- **Sparse audio slots:** Missing audio references leave their time windows empty without shifting later references. Choose 25 or 33 frames for image references.
+- **Updated example:** The [V2 sample workflow](LTX2.5-MSR-sample-workflow-V2.json) demonstrates two-stage sampling with audio references.
 
 Standalone multi-reference image and optional AVref audio conditioning nodes for LTX-2.5 in ComfyUI.
 
